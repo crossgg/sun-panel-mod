@@ -1,0 +1,17 @@
+html,
+body,
+#app {
+	height: 100%;
+	height: 100dvh; /* iOS Safari 支持动态视口高度 */
+}
+
+body {
+	padding-bottom: constant(safe-area-inset-bottom);
+	padding-bottom: env(safe-area-inset-bottom);
+	
+	// iOS Safari 防护：禁止长按图片菜单
+	-webkit-touch-callout: none;
+	-webkit-user-select: none;
+	user-select: none;
+	touch-action: manipulation;
+}

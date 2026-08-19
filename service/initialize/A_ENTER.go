@@ -1,0 +1,274 @@
+package initialize
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"sun-panel/global"
+	"sun-panel/initialize/cUserToken"
+	"sun-panel/initialize/config"
+	"sun-panel/initialize/database"
+	"sun-panel/initialize/lang"
+	"sun-panel/initialize/other"
+	"sun-panel/initialize/redis"
+	"sun-panel/initialize/runlog"
+	"sun-panel/initialize/systemSettingCache"
+	"sun-panel/initialize/userToken"
+	"sun-panel/lib/bingwallpaper"
+	"sun-panel/lib/cmn"
+	"sun-panel/models"
+	"sun-panel/structs"
+	"time"
+
+	"log"
+
+	"github.com/gin-gonic/gin"
+)
+
+var DB_DRIVER = database.SQLITE
+
+// var RUNCODE = "debug"
+// var ISDOCER = "" // 是否为docker模式
+
+func InitApp() error {
+	Logo()
+	
+	// 创建必要的数据目录
+	os.MkdirAll("/data/conf", 0755)
+	os.MkdirAll("/data/database", 0755)
+	os.MkdirAll("/data/uploads", 0755)
+	os.MkdirAll("/data/runtime", 0755)
+	
+	gin.SetMode(global.RUNCODE) // GIN 运行模式
+
+	// 日志
+	if logger, err := runlog.InitRunlog(global.RUNCODE, "running.log"); err != nil {
+		log.Panicln("Log initialization error", err)
+		panic(err)
+	} else {
+		global.Logger = logger
+	}
+
+	// 命令行运行
+	CommandRun()
+
+	// 配置初始化
+	{
+		if config, err := config.ConfigInit(); err != nil {
+			global.Logger.Errorln("Configuration initialization error", err)
+			return err
+		} else {
+			global.Config = config
+		}
+	}
+
+	// 多语言初始化
+	lang.LangInit("zh-cn") // en-us
+
+	DatabaseConnect()
+
+	// Redis 连接
+	{
+		// 判断是否有使用redis的驱动，没有将不连接
+		cacheDrive := global.Config.GetValueString("base", "cache_drive")
+		queueDrive := global.Config.GetValueString("base", "queue_drive")
+		if cacheDrive == "redis" || queueDrive == "redis" {
+			redisConfig := structs.IniConfigRedis{}
+			global.Config.GetSection("redis", &redisConfig)
+			rdb, err := redis.InitRedis(redis.Options{
+				Addr:     redisConfig.Address,
+				Password: redisConfig.Password,
+				DB:       redisConfig.Db,
+			})
+
+			if err != nil {
+				log.Panicln("Redis initialization error", err)
+				panic(err)
+				// return err
+			}
+			global.RedisDb = rdb
+		}
+	}
+
+	// 初始化用户token
+	global.UserToken = userToken.InitUserToken()
+	global.CUserToken = cUserToken.InitCUserToken()
+
+	// 其他的初始化
+	global.VerifyCodeCachePool = other.InitVerifyCodeCachePool()
+	global.SystemSetting = systemSettingCache.InItSystemSettingCache()
+	global.SystemMonitor = global.NewCache[interface{}](5*time.Hour, -1, "systemMonitorCache")
+
+	// 异步执行耗时任务，延迟5秒启动，避免阻塞服务器启动日志
+	go func() {
+		time.Sleep(5 * time.Second)
+		// 异步更新item_icon表中的非base64格式图标
+		go UpdateIconBase64()
+		// 异步更新bookmark表中的parent_id字段，将老数据的parent_url转换为parent_id
+		go UpdateBookmarkParentId()
+		// 异步更新bookmark表中icon_json为空的数据，使用谷歌API获取图标
+		go UpdateBookmarkIconJson()
+		// 启动 BING 壁纸每日下载任务
+		bingwallpaper.StartDailyTask()
+		// 启动提醒检查器
+		global.InitRemindChecker(global.Db)
+	}()
+
+	return nil
+}
+
+func DatabaseConnect() {
+	// 数据库连接 - 开始
+	var dbClientInfo database.DbClient
+	databaseDrive := global.Config.GetValueStringOrDefault("base", "database_drive")
+	if databaseDrive == database.MYSQL {
+		dbClientInfo = &database.MySQLConfig{
+			Username:    global.Config.GetValueStringOrDefault("mysql", "username"),
+			Password:    global.Config.GetValueStringOrDefault("mysql", "password"),
+			Host:        global.Config.GetValueStringOrDefault("mysql", "host"),
+			Port:        global.Config.GetValueStringOrDefault("mysql", "port"),
+			Database:    global.Config.GetValueStringOrDefault("mysql", "db_name"),
+			WaitTimeout: global.Config.GetValueInt("mysql", "wait_timeout"),
+		}
+	} else {
+		dbClientInfo = &database.SQLiteConfig{
+			Filename: global.Config.GetValueStringOrDefault("sqlite", "file_path"),
+		}
+	}
+
+	if db, err := database.DbInit(dbClientInfo); err != nil {
+		log.Panicln("Database initialization error", err)
+		panic(err)
+	} else {
+		global.Db = db
+		models.Db = global.Db
+		global.Logger.Infof("DATABASE CONNECTED: [%v] at path [%s]", databaseDrive, global.Config.GetValueStringOrDefault("sqlite", "file_path"))
+	}
+
+	database.CreateDatabase(databaseDrive, global.Db)
+
+	database.NotFoundAndCreateUser(global.Db)
+	database.NotFoundAndCreateSearchEngines(global.Db)
+	
+	// 自动迁移：为 files 表添加 file_type 字段（如果不存在）
+	MigrateFileTypeField()
+}
+
+// 命令行运行
+func CommandRun() {
+	var (
+		cfg bool
+		pwd bool
+	)
+
+	flag.BoolVar(&cfg, "config", false, "Generate configuration file")
+	flag.BoolVar(&pwd, "password-reset", false, "Reset the password of the first user")
+
+	flag.Parse()
+
+	if cfg {
+		// 生成配置文件
+		fmt.Println("Generating configuration file")
+		cmn.AssetsTakeFileToPath("conf.example.ini", "/data/conf/conf.example.ini")
+		cmn.AssetsTakeFileToPath("conf.example.ini", "/data/conf/conf.ini")
+		fmt.Println("The configuration file has been created  /data/conf/conf.ini ", "Please modify according to your own needs")
+		os.Exit(0) // 务必退出
+	} else if pwd {
+		// 重置密码
+
+		// 配置初始化
+		config, _ := config.ConfigInit()
+		global.Config = config
+
+		DatabaseConnect()
+		userInfo := models.User{}
+		if err := global.Db.Where("role=?", 1).Order("id").First(&userInfo).Error; err != nil {
+			fmt.Println("ERROR", err.Error())
+			os.Exit(0) // 务必退出
+		}
+
+		newPassword := "123456"
+
+		updateInfo := models.User{
+			Password: cmn.PasswordEncryption(newPassword),
+			Token:    "",
+		}
+		// 重置第一个管理员的密码
+		if err := global.Db.Select("Password", "Token").Where("id=?", userInfo.ID).Updates(&updateInfo).Error; err != nil {
+			fmt.Println("ERROR", err.Error())
+			os.Exit(0) // 务必退出
+		}
+
+		fmt.Println("The password has been successfully reset. Here is the account information")
+		fmt.Println("Username ", userInfo.Username)
+		fmt.Println("Password ", newPassword)
+		os.Exit(0) // 务必退出
+	} else {
+		return
+	}
+	os.Exit(0) // 务必退出
+}
+
+func Logo() {
+	fmt.Println("     ____            ___                __")
+	fmt.Println("    / __/_ _____    / _ \\___ ____  ___ / /")
+	fmt.Println("   _\\ \\/ // / _ \\  / ___/ _ `/ _ \\/ -_) / ")
+	fmt.Println("  /___/\\_,_/_//_/ /_/   \\_,_/_//_/\\__/_/  ")
+	fmt.Println("")
+
+	versionInfo := cmn.GetSysVersionInfo()
+	fmt.Println("Version:", versionInfo.Version)
+	fmt.Println("Welcome to the Sun-Panel-v2.")
+	fmt.Println("Project address:", "https://github.com/crossgg/sun-panel-mod")
+
+}
+
+// MigrateFileTypeField 自动迁移：为 files 表添加 file_type 字段
+func MigrateFileTypeField() {
+	global.Logger.Info("Checking if file_type column exists in files table...")
+	
+	// 先检查 files 表是否存在
+	var tableCount int64
+	err := global.Db.Raw(`
+		SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='files'
+	`).Count(&tableCount).Error
+	
+	if err != nil {
+		global.Logger.Warn("Failed to check files table:", err)
+		return
+	}
+	
+	if tableCount == 0 {
+		// 表不存在，创建表（AutoMigrate 会包含所有字段）
+		global.Logger.Info("files table does not exist, creating it with AutoMigrate...")
+		if err := global.Db.AutoMigrate(&models.File{}); err != nil {
+			global.Logger.Error("Failed to create files table:", err)
+			return
+		}
+		global.Logger.Info("Successfully created files table with all fields")
+		return
+	}
+	
+	// 表存在，检查字段是否存在
+	var count int64
+	err = global.Db.Raw(`
+		SELECT COUNT(*) FROM pragma_table_info('files') WHERE name='file_type'
+	`).Count(&count).Error
+	
+	if err != nil {
+		global.Logger.Warn("Failed to check file_type column:", err)
+		return
+	}
+	
+	if count == 0 {
+		// 字段不存在，执行迁移
+		global.Logger.Info("Adding file_type column to files table...")
+		if err := global.Db.Exec("ALTER TABLE files ADD COLUMN file_type VARCHAR(20) DEFAULT 'notepad'").Error; err != nil {
+			global.Logger.Error("Failed to add file_type column:", err)
+			return
+		}
+		global.Logger.Info("Successfully added file_type column to files table")
+	} else {
+		global.Logger.Info("file_type column already exists, skipping migration")
+	}
+}

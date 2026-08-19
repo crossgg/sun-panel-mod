@@ -1,0 +1,102 @@
+package router
+
+import (
+	"net/http"
+	"os"
+	"path/filepath"
+	"sun-panel/global"
+
+	// "sun-panel/router/admin"
+	"sun-panel/router/openapi"
+	"sun-panel/router/openness"
+	"sun-panel/router/panel"
+	"sun-panel/router/system"
+
+	"github.com/gin-gonic/gin"
+)
+
+func resolveWebPath() string {
+	for _, candidate := range []string{"./web", "../dist"} {
+		info, err := os.Stat(filepath.Join(candidate, "index.html"))
+		if err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return "./web"
+}
+
+// 初始化总路由
+func InitRouters(addr string) error {
+	router := gin.Default()
+	rootRouter := router.Group("/")
+	routerGroup := rootRouter.Group("api")
+	routerGroup.Use(Cors()) // Apply CORS to all /api routes
+
+	// 接口
+	system.Init(routerGroup)
+	system.InitPingRouter(rootRouter)
+	panel.Init(routerGroup)
+	openness.Init(routerGroup)
+	openapi.Init(rootRouter, routerGroup, Cors())
+
+	// WEB文件服务
+	{
+		webPath := resolveWebPath()
+		router.StaticFile("/", webPath+"/index.html")
+		router.Static("/assets", webPath+"/assets")
+		router.Static("/custom", webPath+"/custom")
+		router.StaticFile("/favicon.ico", webPath+"/favicon.ico")
+		router.StaticFile("/favicon.svg", webPath+"/favicon.svg")
+
+		// SPA fallback: 所有非API、非静态文件请求都返回 index.html
+		router.NoRoute(func(c *gin.Context) {
+			path := c.Request.URL.Path
+			// 如果是API请求或静态资源，返回404
+			if len(path) >= 4 && path[:4] == "/api" ||
+				len(path) >= 9 && path[:9] == "/openapi/" ||
+				len(path) >= 8 && path[:8] == "/assets/" ||
+				len(path) >= 8 && path[:8] == "/custom/" ||
+				path == "/favicon.ico" || path == "/favicon.svg" {
+				c.String(http.StatusNotFound, "404 page not found")
+				return
+			}
+			// 其他情况返回 index.html（支持前端路由）
+			c.File(webPath + "/index.html")
+		})
+	}
+
+	// 上传的文件 - 支持多种路径格式
+	sourcePath := global.Config.GetValueString("base", "source_path")
+
+	// 完整路径访问（推荐）
+	router.Static("/data/uploads", sourcePath)
+
+	// 短路径访问（兼容旧数据）
+	router.Static("/uploads", sourcePath)
+
+	global.Logger.Info("Sun-Panel is Started.  Listening and serving HTTP on ", addr)
+	return router.Run(addr)
+}
+
+func Cors() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		method := c.Request.Method
+		origin := c.Request.Header.Get("Origin")
+		if origin != "" {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE, UPDATE")
+			c.Header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, Token, token, x-token")
+			c.Header("Access-Control-Expose-Headers", "Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Cache-Control, Content-Language, Content-Type")
+			c.Header("Access-Control-Allow-Credentials", "true")
+			// Private Network Access support
+			c.Header("Access-Control-Allow-Private-Network", "true")
+		}
+
+		if method == "OPTIONS" {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
+	}
+}

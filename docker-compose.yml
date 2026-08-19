@@ -1,0 +1,14 @@
+version: "3.2"
+
+services:
+  sun-panel:
+    image: 'ghcr.io/crossgg/sun-panel-mod:latest'
+    container_name: sun-panel
+    volumes:
+    - ./conf:/data/conf
+    - ./uploads:/data/uploads
+    - ./database:/data/database
+    # - ./runtime:/data/runtime
+    ports:
+    - 3002:3002
+    restart: unless-stopped
