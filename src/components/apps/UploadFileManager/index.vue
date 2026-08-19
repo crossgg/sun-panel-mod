@@ -123,6 +123,25 @@ async function handleFileSelect(event: Event) {
   }
 }
 
+const imageFileExtensions = new Set([
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.gif',
+  '.webp',
+  '.svg',
+  '.bmp',
+  '.ico',
+])
+
+function isImageFile(fileName: string) {
+  const extensionIndex = fileName.lastIndexOf('.')
+  if (extensionIndex < 0)
+    return false
+
+  return imageFileExtensions.has(fileName.slice(extensionIndex).toLowerCase())
+}
+
 onMounted(() => {
   getFileList()
 })
@@ -167,7 +186,15 @@ onMounted(() => {
             <NCard size="small" style="border-radius: 5px;" :bordered="true">
               <template #cover>
                 <div class="card transparent-grid">
-                  <NImage :lazy="true" style="object-fit: contain;height: 100%;" :src="item.src" />
+                  <NImage
+                    v-if="isImageFile(item.fileName)"
+                    :lazy="true"
+                    style="object-fit: contain;height: 100%;"
+                    :src="item.src"
+                  />
+                  <div v-else class="flex h-full items-center justify-center">
+                    <SvgIcon class="h-10 w-10 text-gray-500" icon="tabler:file" />
+                  </div>
                 </div>
               </template>
               <template #footer>

@@ -181,8 +181,8 @@
 											: 'hover:bg-gray-50 dark:hover:bg-gray-700'
 									]"
 									@contextmenu.prevent="!isMobile ? openContextMenu($event, item) : null"
-									@click="focusedItemId = String(item.id)"
-									@dblclick="item.isFolder ? openFolder(item.id) : openBookmark(item)"
+									@click="handleItemClick(item)"
+									@dblclick="!isMobile && (item.isFolder ? openFolder(item.id) : openBookmark(item))"
 								>
 									<!-- 图标 -->
 									<div class="flex-shrink-0 w-4 h-4 flex items-center justify-center mr-3">
@@ -659,6 +659,18 @@ function openFolder(folderId: string | number) {
 	selectedFolder.value = String(folderId)
 	searchQuery.value = '' // 清空搜索框
 	selectedKeysRef.value = [String(folderId)] // 同步左侧树选中状态
+}
+
+function handleItemClick(item: Bookmark & { isFolder?: boolean }) {
+  focusedItemId.value = String(item.id)
+
+  if (!isMobile.value)
+    return
+
+  if (item.isFolder)
+    openFolder(item.id)
+  else
+    openBookmark(item)
 }
 
 
