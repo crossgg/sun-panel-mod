@@ -16,7 +16,7 @@ jobs:
       - name: Cleanup old package versions
         uses: actions/delete-package-versions@v4
         with:
-          package-name: 'sun-panel-dd'
+          package-name: 'sun-panel-mod'
           package-type: 'container'
           min-versions-to-keep: 2
           delete-only-untagged-versions: 'true'
