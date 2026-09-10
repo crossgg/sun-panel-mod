@@ -71,10 +71,7 @@ Sun-Panel-dd 一个服务器、NAS导航面板、Homepage、浏览器首页、�
 ```yml
 docker run -d \
   --name sun-panel \
-  -v $(pwd)/sun-panel/conf:/data/conf \
-  -v $(pwd)/sun-panel/uploads:/data/uploads \
-  -v $(pwd)/sun-panel/database:/data/database \
-  -v $(pwd)/sun-panel/runtime:/data/runtime \
+  -v $(pwd)/data:/data \
   -p 3002:3002 \
   --restart unless-stopped \
   ghcr.io/crossgg/sun-panel-mod:latest
@@ -83,10 +80,7 @@ docker run -d \
 ```yml
 docker run -d \
   --name sun-panel \
-  -v $(pwd)/sun-panel/conf:/data/conf \
-  -v $(pwd)/sun-panel/uploads:/data/uploads \
-  -v $(pwd)/sun-panel/database:/data/database \
-  -v $(pwd)/sun-panel/runtime:/data/runtime \
+  -v $(pwd)/data:/data \
   -p 3002:3002 \
   --restart unless-stopped \
   ghcr.1ms.run/crossgg/sun-panel-mod:latest
