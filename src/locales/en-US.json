@@ -121,7 +121,8 @@
       "topMargin": "Top margin",
       "uploadOrDragText": "Click to upload or drag and drop into the box to replace the image",
       "vague": "Blur",
-      "wallpaper": "Wallpaper"
+      "wallpaper": "Wallpaper",
+      "defaultOpenMethod": "Default open method"
     },
     "exportImport": {
       "appName": "Export/Import",

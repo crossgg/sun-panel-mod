@@ -30,6 +30,21 @@ const iconTypeOptions = [
   },
 ]
 
+const openMethodOptions = [
+  {
+    label: t('iconItem.currentPageOpen'),
+    value: 1,
+  },
+  {
+    label: t('iconItem.newWindowOpen'),
+    value: 2,
+  },
+  {
+    label: t('iconItem.currentPageLayerOpen'),
+    value: 3,
+  },
+]
+
 const maxWidthUnitOption = [
   {
     label: 'px',
@@ -239,6 +254,15 @@ function resetPanelConfig() {
         </div>
         <div class="flex items-center mt-[5px]">
           <NSwitch v-model:value="panelState.panelConfig.iconTextIconHideTitle" />
+        </div>
+      </div>
+
+      <div class="mt-[5px]">
+        <div>
+          {{ $t('apps.baseSettings.defaultOpenMethod') }}
+        </div>
+        <div class="flex items-center mt-[5px]">
+          <NSelect v-model:value="panelState.panelConfig.defaultOpenMethod" :options="openMethodOptions" />
         </div>
       </div>
 

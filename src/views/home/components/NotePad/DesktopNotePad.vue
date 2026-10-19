@@ -263,8 +263,10 @@ const notepadRef = ref<HTMLElement | null>(null)
 const sidebarRef = ref<HTMLElement | null>(null)
 
 // 状态
-const currentNote = useStorage<Partial<NotepadInfo>>('sun-panel-notepad-current', { id: 0, title: '', content: '' })
-const noteList = useStorage<NotepadInfo[]>('sun-panel-notepad-list', [])
+const currentNote = ref<Partial<NotepadInfo>>({ id: 0, title: '', content: '' })
+const noteList = ref<NotepadInfo[]>([])
+const lastActiveNoteId = useStorage<number>('sun-panel-notepad-active-id', 0)
+const isDirty = ref(false)
 const searchKeyword = ref('')
 const showSortMenu = ref(false)
 const showRemindPicker = ref(false)
@@ -300,6 +302,8 @@ const { x, y } = useDraggable(notepadRef, {
 
 // 初始化
 onMounted(async () => {
+    localStorage.removeItem('sun-panel-notepad-current')
+    localStorage.removeItem('sun-panel-notepad-list')
     if (noteList.value.length === 0) {
         await loadList()
     }
@@ -370,6 +374,7 @@ const formatLocalDateTime = (date: Date): string => {
 // 输入处理
 const handleInput = () => {
     if (!editorRef.value) return
+    isDirty.value = true
     // 只保存内容，不自动生成标题
     saveContent()
 }
@@ -395,6 +400,8 @@ const handlePaste = async (e: ClipboardEvent) => {
     e.preventDefault()
     const text = e.clipboardData?.getData('text/plain') || ''
     document.execCommand('insertText', false, text)
+    isDirty.value = true
+    saveContent()
 }
 
 // 拖拽覆盖事件
@@ -435,6 +442,7 @@ const uploadAndInsertImage = async (file: File) => {
             if (editorRef.value) {
                 editorRef.value.focus()
                 document.execCommand('insertHTML', false, imgHtml)
+                isDirty.value = true
                 saveContent()
             }
             message.success('图片上传成功')
@@ -457,6 +465,7 @@ const insertFileLink = async (file: File) => {
             if (editorRef.value) {
                 editorRef.value.focus()
                 document.execCommand('insertHTML', false, linkHtml)
+                isDirty.value = true
                 saveContent()
             }
             message.success('文件上传成功')
@@ -469,9 +478,13 @@ const insertFileLink = async (file: File) => {
 
 // 核心保存逻辑（只保存便签内容，不保存提醒设置）
 const handleSave = async () => {
+    if (!isDirty.value) return // 未修改则不触发保存，避免旧数据覆写
     if (editorRef.value) {
         try {
             const content = editorRef.value.innerHTML
+            const text = editorRef.value.innerText.trim()
+            if (!currentNote.value.id && !text && !content) return
+
             // 使用当前标题，不自动生成
             const title = currentNote.value.title || '无标题'
             const saveId = currentNote.value.id || 0
@@ -484,8 +497,12 @@ const handleSave = async () => {
             })
             
             if (res.code === 0) {
+                isDirty.value = false
                 if (currentNote.value.id === saveId) {
                     currentNote.value = res.data
+                    if (res.data.id) {
+                        lastActiveNoteId.value = res.data.id
+                    }
                 }
                 await loadList()
             }
@@ -499,11 +516,18 @@ const handleSave = async () => {
 const saveContent = useDebounceFn(handleSave, 1000)
 
 // 切换便签
-const selectNote = (note: NotepadInfo) => {
+const selectNote = async (note: NotepadInfo) => {
+    if (isDirty.value && currentNote.value.id && currentNote.value.id !== note.id) {
+        await handleSave()
+    }
     console.log('[NotePad] selectNote:', note.title)
     currentNote.value = { ...note }
+    if (note.id) {
+        lastActiveNoteId.value = note.id
+    }
     currentRepeatType.value = note.remindRepeat || 'none'
     currentAdvanceDays.value = note.remindAdvanceDays || 0
+    isDirty.value = false
     
     // 如果重复类型是“不重复”或“每天”，强制重置提前天数为0
     if (currentRepeatType.value === 'none' || currentRepeatType.value === 'daily') {
@@ -520,11 +544,15 @@ const selectNote = (note: NotepadInfo) => {
 }
 
 // 新建便签
-const createNew = () => {
+const createNew = async () => {
+    if (isDirty.value && currentNote.value.id) {
+        await handleSave()
+    }
     const finalTitle = `便签${noteList.value.length + 1}`
     currentNote.value = { id: 0, title: finalTitle, content: '' }
     currentRepeatType.value = 'none'
     currentAdvanceDays.value = 0
+    isDirty.value = false
     if (editorRef.value) {
         editorRef.value.innerHTML = ''
         editorRef.value.focus()
@@ -607,7 +635,9 @@ const saveHeaderTitle = async () => {
 
 // 关闭
 const handleClose = () => {
-    handleSave()
+    if (isDirty.value) {
+        handleSave()
+    }
     emit('update:visible', false)
 }
 
@@ -987,44 +1017,34 @@ watch(() => props.visible, (val) => {
     if (val) {
         initData()
     } else {
-        handleSave()
+        if (isDirty.value) {
+            handleSave()
+        }
     }
 })
 
 const initData = async () => {
     console.log('[NotePad] initData 开始')
+    isDirty.value = false
     await loadList()
     console.log('[NotePad] 列表加载完成，共', noteList.value.length, '个便签')
     
-    // 强制从 localStorage 重新读取 currentNote，确保获取最新值
-    const storedCurrentNote = localStorage.getItem('sun-panel-notepad-current')
-    if (storedCurrentNote) {
-        try {
-            const parsed = JSON.parse(storedCurrentNote)
-            console.log('[NotePad] 从 storage 读取到 currentNote:', parsed)
-            // 更新 currentNote.value
-            currentNote.value = parsed
-        } catch (e) {
-            console.error('[NotePad] 解析 currentNote 失败:', e)
-        }
-    }
-    
-    // 如果有当前便签ID，从列表中查找并恢复
-    if (currentNote.value.id && noteList.value.length > 0) {
-        const savedNote = noteList.value.find(n => n.id === currentNote.value.id)
-        console.log('[NotePad] 查找便签 ID:', currentNote.value.id, '找到:', !!savedNote)
+    // 如果有记录的便签ID，从最新拉取到的列表中查找并恢复
+    const targetId = lastActiveNoteId.value || currentNote.value.id
+    if (targetId && noteList.value.length > 0) {
+        const savedNote = noteList.value.find(n => n.id === targetId)
+        console.log('[NotePad] 查找便签 ID:', targetId, '找到:', !!savedNote)
         if (savedNote) {
-            // 恢复便签内容和状态
             selectNote(savedNote)
         } else {
-            // 如果找不到，选中第一个便签
             console.log('[NotePad] 未找到，选中第一个')
             selectNote(noteList.value[0])
         }
     } else if (noteList.value.length > 0) {
-        // 如果没有当前便签ID，选中第一个
         console.log('[NotePad] 无当前ID，选中第一个')
         selectNote(noteList.value[0])
+    } else {
+        createNew()
     }
 }
 </script>

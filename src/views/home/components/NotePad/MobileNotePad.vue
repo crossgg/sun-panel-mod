@@ -262,8 +262,10 @@ const editorRef = ref<HTMLDivElement | null>(null)
 const currentView = ref<'list' | 'editor' | 'remind'>('list')
 
 // 数据状态
-const currentNote = useStorage<Partial<NotepadInfo>>('sun-panel-notepad-current', { id: 0, title: '', content: '' })
-const noteList = useStorage<NotepadInfo[]>('sun-panel-notepad-list', [])
+const currentNote = ref<Partial<NotepadInfo>>({ id: 0, title: '', content: '' })
+const noteList = ref<NotepadInfo[]>([])
+const lastActiveNoteId = useStorage<number>('sun-panel-notepad-active-id', 0)
+const isDirty = ref(false)
 const searchKeyword = ref('')
 const showSortMenu = ref(false)
 const currentRepeatType = ref<string>('none')
@@ -274,6 +276,8 @@ const editingTitleValue = ref('') // 编辑中的标题值
 
 // 初始化
 onMounted(async () => {
+    localStorage.removeItem('sun-panel-notepad-current')
+    localStorage.removeItem('sun-panel-notepad-list')
     if (noteList.value.length === 0) {
         await loadList()
     }
@@ -334,6 +338,7 @@ const formatLocalDateTime = (date: Date): string => {
 // 输入处理
 const handleInput = () => {
     if (!editorRef.value) return
+    isDirty.value = true
     // 只保存内容，不自动生成标题
     saveContent()
 }
@@ -357,6 +362,8 @@ const handlePaste = async (e: ClipboardEvent) => {
     e.preventDefault()
     const text = e.clipboardData?.getData('text/plain') || ''
     document.execCommand('insertText', false, text)
+    isDirty.value = true
+    saveContent()
 }
 
 // 上传图片
@@ -371,6 +378,7 @@ const uploadAndInsertImage = async (file: File) => {
             if (editorRef.value) {
                 editorRef.value.focus()
                 document.execCommand('insertHTML', false, imgHtml)
+                isDirty.value = true
                 saveContent()
             }
             message.success('图片上传成功')
@@ -383,6 +391,7 @@ const uploadAndInsertImage = async (file: File) => {
 
 // 保存逻辑
 const handleSave = async () => {
+    if (!isDirty.value) return // 未修改则不触发保存，避免覆盖新数据
     // 如果没有编辑器引用或当前便签ID为0且内容为空，不保存
     if (!editorRef.value) return
     
@@ -406,8 +415,12 @@ const handleSave = async () => {
         })
         
         if (res.code === 0) {
+            isDirty.value = false
             if (currentNote.value.id === saveId) {
                 currentNote.value = res.data
+                if (res.data.id) {
+                    lastActiveNoteId.value = res.data.id
+                }
             }
             await loadList()
         }
@@ -430,9 +443,16 @@ watch(() => currentNote.value, (newNote) => {
 
 // 切换便签
 const selectNote = (note: NotepadInfo) => {
+    if (isDirty.value && currentNote.value.id && currentNote.value.id !== note.id) {
+        handleSave()
+    }
     currentNote.value = { ...note }
+    if (note.id) {
+        lastActiveNoteId.value = note.id
+    }
     currentRepeatType.value = note.remindRepeat || 'none'
     currentAdvanceDays.value = note.remindAdvanceDays || 0
+    isDirty.value = false
     
     if (currentRepeatType.value === 'none' || currentRepeatType.value === 'daily') {
         currentAdvanceDays.value = 0
@@ -452,10 +472,14 @@ const selectNote = (note: NotepadInfo) => {
 
 // 新建便签
 const createNew = () => {
+    if (isDirty.value && currentNote.value.id) {
+        handleSave()
+    }
     const finalTitle = `便签${noteList.value.length + 1}`
     currentNote.value = { id: 0, title: finalTitle, content: '' }
     currentRepeatType.value = 'none'
     currentAdvanceDays.value = 0
+    isDirty.value = false
     currentView.value = 'editor'
     nextTick(() => {
         if (editorRef.value) {
@@ -509,14 +533,18 @@ const saveMobileTitle = async () => {
 const handleClose = () => {
     if (currentView.value === 'editor') {
         // 在编辑页，先保存然后返回列表
-        handleSave()
+        if (isDirty.value) {
+            handleSave()
+        }
         currentView.value = 'list'
     } else if (currentView.value === 'remind') {
         // 在提醒页，直接返回编辑页
         currentView.value = 'editor'
     } else {
         // 在列表页，关闭整个记事本
-        handleSave()
+        if (isDirty.value) {
+            handleSave()
+        }
         emit('update:visible', false)
     }
 }
@@ -524,7 +552,9 @@ const handleClose = () => {
 // 返回上一级
 const goBack = () => {
     if (currentView.value === 'editor') {
-        handleSave()
+        if (isDirty.value) {
+            handleSave()
+        }
         currentView.value = 'list'
     } else if (currentView.value === 'remind') {
         currentView.value = 'editor'
@@ -725,31 +755,31 @@ watch(() => props.visible, (val) => {
     if (val) {
         initData()
     } else {
-        handleSave()
+        if (isDirty.value) {
+            handleSave()
+        }
     }
 })
 
 const initData = async () => {
-    // 先异步加载列表
+    isDirty.value = false
     await loadList()
     
-    // 如果当前有正在编辑的便签（从PC端切换过来），保持编辑状态
-    if (currentNote.value.id && currentNote.value.content) {
-        // 已经有内容，直接进入编辑视图
-        currentView.value = 'editor'
-        nextTick(() => {
-            if (editorRef.value) {
-                editorRef.value.innerHTML = currentNote.value.content || ''
-            }
-        })
-    } else {
-        // 没有内容，显示列表
-        currentView.value = 'list'
-        currentNote.value = { id: 0, title: '', content: '' }
+    // 如果当前在编辑视图且有选中的便签ID，从服务端最新列表同步最新数据
+    const targetId = currentNote.value.id || lastActiveNoteId.value
+    if (targetId && currentView.value === 'editor') {
+        const found = noteList.value.find(n => n.id === targetId)
+        if (found) {
+            selectNote(found)
+            return
+        }
     }
+    
+    currentView.value = 'list'
+    currentNote.value = { id: 0, title: '', content: '' }
 }
 
-defineExpose({ refreshData: loadList })
+defineExpose({ refreshData: loadList, selectNote })
 </script>
 
 <style scoped lang="less">

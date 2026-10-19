@@ -72,6 +72,7 @@ declare namespace Panel {
         autoNetworkWallpaper?:boolean // 是否启用自动获取网络壁纸
         autoNetworkWallpaperApi?:string // 自动获取网络壁纸API地址
         useBingWallpaper?:boolean // 是否使用 BING 每日壁纸
+        defaultOpenMethod?:number // 默认打开方式 1:当前页打开 2:新窗口打开 3:浮层窗口打开
     }
 
     interface userConfig{

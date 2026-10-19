@@ -6,6 +6,7 @@ import IconEditor from './IconEditor.vue'
 import { edit, getSiteFavicon } from '@/api/panel/itemIcon'
 import { getList as getGroupList } from '@/api/panel/itemIconGroup'
 import { t } from '@/locales'
+import { usePanelState } from '@/store'
 
 interface Props {
   visible: boolean
@@ -16,6 +17,19 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<Emit>()
 const ms = useMessage()
+const panelState = usePanelState()
+const LAST_OPEN_METHOD_KEY = 'sun-panel-default-open-method'
+
+function getDefaultOpenMethod(): number {
+  const localVal = localStorage.getItem(LAST_OPEN_METHOD_KEY)
+  if (localVal) {
+    const parsed = parseInt(localVal, 10)
+    if (!isNaN(parsed) && [1, 2, 3].includes(parsed)) {
+      return parsed
+    }
+  }
+  return panelState.panelConfig.defaultOpenMethod ?? 1
+}
 const submitLoading = ref(false)
 const getIconLoading = ref([false, false])
 const itemIconGroupOptions = ref<{
@@ -90,6 +104,9 @@ async function editApi() {
     const { code, data, msg } = await edit<Panel.ItemInfo>(model.value)
     if (code === 0) {
       show.value = false
+      if (model.value.openMethod) {
+        localStorage.setItem(LAST_OPEN_METHOD_KEY, String(model.value.openMethod))
+      }
       model.value = { ...restoreDefault }
 
       emit('done', data)
@@ -134,7 +151,10 @@ async function getIconByUrl(url: string, loadingIndex: number) {
 
 watch(() => props.visible, (newValue) => {
   if (newValue === true) {
-    model.value = props.itemInfo ? { ...props.itemInfo } : { ...restoreDefault }
+    const defaultOpenMethod = getDefaultOpenMethod()
+    model.value = props.itemInfo
+      ? { ...props.itemInfo }
+      : { ...restoreDefault, openMethod: defaultOpenMethod }
     if (props.itemGroupId)
       model.value.itemIconGroupId = props.itemGroupId
   }
