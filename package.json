@@ -71,5 +71,12 @@
     "*.{ts,tsx,vue}": [
       "pnpm lint:fix"
     ]
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "core-js",
+      "esbuild",
+      "vue-demi"
+    ]
   }
 }
